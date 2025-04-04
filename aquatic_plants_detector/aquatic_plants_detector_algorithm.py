@@ -35,7 +35,8 @@ from qgis.core import (QgsProcessing,
                        QgsFeatureSink,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterFeatureSink)
+                       QgsProcessingParameterFeatureSink,
+                       QgsProcessingParameterString)
 
 
 class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
@@ -58,6 +59,8 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
 
     OUTPUT = 'OUTPUT'
     INPUT = 'INPUT'
+    MASK = 'MASK'
+    NDAI = 'NDAI'
 
     def initAlgorithm(self, config):
         """
@@ -70,8 +73,23 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFeatureSource(
                 self.INPUT,
-                self.tr('Input layer'),
-                [QgsProcessing.TypeVectorAnyGeometry]
+                self.tr('Input raster layer'),
+                [QgsProcessing.TypeRaster]
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterFeatureSource(
+                self.MASK,
+                self.tr('Input mask layer'),
+                [QgsProcessing.TypeVectorPolygon]
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.NDAI,
+                self.tr('List of NDAI threshold values. Ex: 0.5,0.8'),
             )
         )
 
