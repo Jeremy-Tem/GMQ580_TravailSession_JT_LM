@@ -36,7 +36,8 @@ from qgis.core import (QgsProcessing,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFeatureSink,
-                       QgsProcessingParameterString)
+                       QgsProcessingParameterString,
+                       QgsProcessingParameterRasterLayer)
 
 
 class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
@@ -71,7 +72,7 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         # We add the input vector features source. It can have any kind of
         # geometry.
         self.addParameter(
-            QgsProcessingParameterFeatureSource(
+            QgsProcessingParameterRasterLayer(
                 self.INPUT,
                 self.tr('Input raster layer'),
                 [QgsProcessing.TypeRaster]
