@@ -34,10 +34,11 @@ from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (QgsProcessing,
                        QgsFeatureSink,
                        QgsProcessingAlgorithm,
-                       QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFeatureSink,
                        QgsProcessingParameterString,
-                       QgsProcessingParameterRasterLayer)
+                       QgsProcessingParameterRasterLayer,
+                       QgsProcessingException)
+import os
 
 
 class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
@@ -60,7 +61,6 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
 
     OUTPUT = 'OUTPUT'
     INPUT = 'INPUT'
-    MASK = 'MASK'
     NDAI = 'NDAI'
 
     def initAlgorithm(self, config):
@@ -80,17 +80,10 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         )
 
         self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.MASK,
-                self.tr('Input mask layer'),
-                [QgsProcessing.TypeVectorPolygon]
-            )
-        )
-
-        self.addParameter(
             QgsProcessingParameterString(
                 self.NDAI,
                 self.tr('List of NDAI threshold values. Ex: 0.5,0.8'),
+                optional=True
             )
         )
 
@@ -112,7 +105,16 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         # Retrieve the feature source and sink. The 'dest_id' variable is used
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.
-        source = self.parameterAsSource(parameters, self.INPUT, context)
+        raster_layer = self.parameterAsSource(parameters, self.INPUT, context)
+        ndai = self.parameterAsString(parameters, self.NDAI, context)
+        output_path = self.parameterAsString(parameters, self.OUTPUT, context)
+
+        try : 
+            ndai_min, ndai_max = map(float, ndai.split(','))
+        except ValueError:
+            raise QgsProcessingException(self.tr('Invalid NDAI values. Provide two comma-separated values.'))
+        
+
         (sink, dest_id) = self.parameterAsSink(parameters, self.OUTPUT,
                 context, source.fields(), source.wkbType(), source.sourceCrs())
 
