@@ -1,3 +1,4 @@
+#Tests algues
 # -*- coding: utf-8 -*-
 
 """
@@ -12,142 +13,166 @@
         email                : Liam.Messier@Usherbrooke.ca
  ***************************************************************************/
 
-/***************************************************************************
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- ***************************************************************************/
+
 """
 
 __author__ = 'Liam Messier & Jeremy Tem'
 __date__ = '2025-04-01'
 __copyright__ = '(C) 2025 by Liam Messier & Jeremy Tem'
 
-# This will get replaced with a git SHA1 when you do a git archive
-
-__revision__ = '$Format:%H$'
-
 from qgis.PyQt.QtCore import QCoreApplication
-from qgis.core import (QgsProcessing,
-                       QgsFeatureSink,
+from qgis.core import (QgsProcessingException,
                        QgsProcessingAlgorithm,
-                       QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterFeatureSink,
-                       QgsProcessingParameterString)
+                       QgsProcessingParameterString,
+                       QgsProcessingParameterRasterLayer,
+                       QgsProcessingParameterRasterDestination)
+from qgis.analysis import (QgsRasterCalculator, 
+                           QgsRasterCalculatorEntry)
+import os
+import tempfile
+from osgeo import gdal
+import numpy as np
 
 
 class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
     """
-    This is an example algorithm that takes a vector layer and
-    creates a new identical one.
-
-    It is meant to be used as an example of how to create your own
-    algorithms and explain methods and variables used to do it. An
-    algorithm like this will be available in all elements, and there
-    is not need for additional work.
-
-    All Processing algorithms should extend the QgsProcessingAlgorithm
-    class.
+    This algorithm calculates the Normalized Difference Algae Index (NDAI)
+    from Sentinel-2 imagery and filters the output based on user-defined thresholds.
     """
-
-    # Constants used to refer to parameters and outputs. They will be
-    # used when calling the algorithm from another algorithm, or when
-    # calling from the QGIS console.
 
     OUTPUT = 'OUTPUT'
     INPUT = 'INPUT'
-    MASK = 'MASK'
     NDAI = 'NDAI'
 
     def initAlgorithm(self, config):
         """
-        Here we define the inputs and output of the algorithm, along
-        with some other properties.
+        Define the inputs and outputs of the algorithm.
         """
-
-        # We add the input vector features source. It can have any kind of
-        # geometry.
         self.addParameter(
-            QgsProcessingParameterFeatureSource(
+            QgsProcessingParameterRasterLayer(
                 self.INPUT,
-                self.tr('Input raster layer'),
-                [QgsProcessing.TypeRaster]
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.MASK,
-                self.tr('Input mask layer'),
-                [QgsProcessing.TypeVectorPolygon]
+                self.tr('Input Sentinel-2 raster layer')
             )
         )
 
         self.addParameter(
             QgsProcessingParameterString(
                 self.NDAI,
-                self.tr('List of NDAI threshold values. Ex: 0.5,0.8'),
+                self.tr('List of NDAI threshold values (e.g., 0.5,0.8)')
             )
         )
 
-        # We add a feature sink in which to store our processed features (this
-        # usually takes the form of a newly created vector layer when the
-        # algorithm is run in QGIS).
         self.addParameter(
-            QgsProcessingParameterFeatureSink(
+            QgsProcessingParameterRasterDestination(
                 self.OUTPUT,
-                self.tr('Output layer')
+                self.tr('Output filtered NDAI raster')
             )
         )
 
     def processAlgorithm(self, parameters, context, feedback):
         """
-        Here is where the processing itself takes place.
+        Perform the NDAI calculation and filtering.
         """
 
-        # Retrieve the feature source and sink. The 'dest_id' variable is used
-        # to uniquely identify the feature sink, and must be included in the
-        # dictionary returned by the processAlgorithm function.
-        source = self.parameterAsSource(parameters, self.INPUT, context)
-        (sink, dest_id) = self.parameterAsSink(parameters, self.OUTPUT,
-                context, source.fields(), source.wkbType(), source.sourceCrs())
+        # Retrieve input parameters
+        raster_layer = self.parameterAsRasterLayer(parameters, self.INPUT, context)
+        ndai_thresholds = self.parameterAsString(parameters, self.NDAI, context)
+        output_path = self.parameterAsOutputLayer(parameters, self.OUTPUT, context)
 
-        # Compute the number of steps to display within the progress bar and
-        # get features from source
-        total = 100.0 / source.featureCount() if source.featureCount() else 0
-        features = source.getFeatures()
+        # Validate input raster
+        feedback.pushInfo(f'Input raster has {raster_layer.bandCount()} bands.')
+        if raster_layer.bandCount() < 5:
+            raise QgsProcessingException('Input raster does not have the required Sentinel-2 bands (B2, B3, B4, B8).')
 
-        for current, feature in enumerate(features):
-            # Stop the algorithm if cancel button has been clicked
-            if feedback.isCanceled():
-                break
+        # Parse NDAI thresholds
+        try:
+            ndai_min, ndai_max = map(float, ndai_thresholds.split(','))
+        except ValueError:
+            raise QgsProcessingException('Invalid NDAI threshold values. Provide two comma-separated numbers.')
 
-            # Add a feature in the sink
-            sink.addFeature(feature, QgsFeatureSink.FastInsert)
+        # Prepare raster calculator entries for Sentinel-2 bands
+        entries = []
+        for band, name in [(2, 'B2'), (3, 'B3'), (4, 'B4'), (5, 'B8')]:
+            entry = QgsRasterCalculatorEntry()
+            entry.ref = f'{raster_layer.name()}@{band}'
+            entry.raster = raster_layer
+            entry.bandNumber = band
+            entries.append(entry)
+        
+        #Display entries
+        feedback.pushInfo(f'Entries: {entries}')
 
-            # Update the progress bar
-            feedback.setProgress(int(current * total))
+        # NDAI formula: ((G + 2NIR - B - R) / (G + 2NIR + B + R)) + 0.5
+        ndai_formula = f"(({entries[1].ref} + 2 * {entries[3].ref} - {entries[0].ref} - {entries[2].ref}) / " \
+                       f"({entries[1].ref} + 2 * {entries[3].ref} + {entries[0].ref} + {entries[2].ref})) + 0.5"
+        feedback.pushInfo(f'NDAI formula: {ndai_formula}')
 
-        # Return the results of the algorithm. In this case our only result is
-        # the feature sink which contains the processed features, but some
-        # algorithms may return multiple feature sinks, calculated numeric
-        # statistics, etc. These should all be included in the returned
-        # dictionary, with keys matching the feature corresponding parameter
-        # or output names.
-        return {self.OUTPUT: dest_id}
+        # Temporary path for NDAI raster
+        temp_ndai_path = os.path.join(tempfile.gettempdir(), 'ndai.tif')
+        feedback.pushInfo(f'Temporary file path: {temp_ndai_path}')
+
+        # Perform raster calculation for NDAI
+        calculator = QgsRasterCalculator(
+            ndai_formula,
+            temp_ndai_path,
+            'GTiff',
+            raster_layer.extent(),
+            raster_layer.width(),
+            raster_layer.height(),
+            entries
+        )
+        result = calculator.processCalculation(feedback)
+
+        # Check if the calculation was successful
+        if result != 0:
+            raise QgsProcessingException(f'Raster calculation failed with error code: {result}')
+        
+        # Filter NDAI values based on thresholds
+        feedback.pushInfo('Filtering NDAI values...')
+        self.filter_ndai(temp_ndai_path, ndai_min, ndai_max, output_path, feedback)
+
+        return {self.OUTPUT: output_path}
+
+    def filter_ndai(self, ndai_path, ndai_min, ndai_max, output_path, feedback):
+        """
+        Filters the NDAI raster based on threshold values.
+        """
+
+        # Check if the file exists
+        if not os.path.exists(ndai_path):
+            raise QgsProcessingException(f'Temporary NDAI file not found: {ndai_path}')
+
+        # Open the NDAI raster
+        ndai_ds = gdal.Open(ndai_path)
+        if ndai_ds is None:
+            raise QgsProcessingException(f'Failed to open NDAI raster: {ndai_path}')
+
+        ndai_band = ndai_ds.GetRasterBand(1)
+        ndai_data = ndai_band.ReadAsArray()
+
+        # Apply threshold filtering
+        feedback.pushInfo('Applying NDAI thresholds...')
+        filtered_data = np.where((ndai_data >= ndai_min) & (ndai_data <= ndai_max), ndai_data, np.nan)
+
+        # Save the filtered raster
+        driver = gdal.GetDriverByName('GTiff')
+        out_ds = driver.Create(output_path, ndai_ds.RasterXSize, ndai_ds.RasterYSize, 1, gdal.GDT_Float32)
+        out_ds.SetGeoTransform(ndai_ds.GetGeoTransform())
+        out_ds.SetProjection(ndai_ds.GetProjection())
+        out_band = out_ds.GetRasterBand(1)
+        out_band.WriteArray(filtered_data)
+        out_band.SetNoDataValue(np.nan)
+        out_band.FlushCache()
+
+        # Clean up
+        ndai_ds = None
+        out_ds = None
 
     def name(self):
         """
-        Returns the algorithm name, used for identifying the algorithm. This
-        string should be fixed for the algorithm, and must not be localised.
-        The name should be unique within each provider. Names should contain
-        lowercase alphanumeric characters only and no spaces or other
-        formatting characters.
+        Returns the algorithm name, used for identifying the algorithm.
         """
-        return 'Aquatic plants detector'
+        return 'aquatic_plants_detector'
 
     def displayName(self):
         """
@@ -158,20 +183,15 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
 
     def group(self):
         """
-        Returns the name of the group this algorithm belongs to. This string
-        should be localised.
+        Returns the name of the group this algorithm belongs to.
         """
         return self.tr(self.groupId())
 
     def groupId(self):
         """
-        Returns the unique ID of the group this algorithm belongs to. This
-        string should be fixed for the algorithm, and must not be localised.
-        The group id should be unique within each provider. Group id should
-        contain lowercase alphanumeric characters only and no spaces or other
-        formatting characters.
+        Returns the unique ID of the group this algorithm belongs to.
         """
-        return ''
+        return 'aquatic_plants'
 
     def tr(self, string):
         return QCoreApplication.translate('Processing', string)
