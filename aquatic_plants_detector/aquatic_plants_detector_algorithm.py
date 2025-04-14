@@ -21,11 +21,17 @@ __date__ = '2025-04-01'
 __copyright__ = '(C) 2025 by Liam Messier & Jeremy Tem'
 
 from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsProcessingException,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterString,
                        QgsProcessingParameterRasterLayer,
-                       QgsProcessingParameterRasterDestination)
+                       QgsProcessingParameterRasterDestination,
+                       QgsRasterLayer,
+                       QgsProject,
+                       QgsSingleBandPseudoColorRenderer,
+                       QgsRasterShader,
+                       QgsColorRampShader)
 from qgis.analysis import (QgsRasterCalculator, 
                            QgsRasterCalculatorEntry)
 import os
@@ -131,6 +137,9 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo('Filtering NDAI values...')
         self.filter_ndai(temp_ndai_path, ndai_min, ndai_max, output_path, feedback)
 
+        # Apply symbology to the output NDAI raster
+        self.apply_symbology(output_path, feedback)
+
         return {self.OUTPUT: output_path}
 
     def filter_ndai(self, ndai_path, ndai_min, ndai_max, output_path, feedback):
@@ -152,7 +161,7 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
 
         # Apply threshold filtering
         feedback.pushInfo('Applying NDAI thresholds...')
-        filtered_data = np.where((ndai_data >= ndai_min) & (ndai_data <= ndai_max), ndai_data, np.nan)
+        filtered_data = np.where((ndai_data >= ndai_min) & (ndai_data <= ndai_max), ndai_data, 0)
 
         # Save the filtered raster
         driver = gdal.GetDriverByName('GTiff')
@@ -161,12 +170,49 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         out_ds.SetProjection(ndai_ds.GetProjection())
         out_band = out_ds.GetRasterBand(1)
         out_band.WriteArray(filtered_data)
-        out_band.SetNoDataValue(np.nan)
+        out_band.SetNoDataValue(0)  # Set NoData value to 0
         out_band.FlushCache()
 
         # Clean up
         ndai_ds = None
         out_ds = None
+
+    def apply_symbology(self, raster_path, feedback):
+        """
+        Applies the Green-Blue (GnBu) color palette to the NDAI raster.
+        """
+        feedback.pushInfo('Applying symbology to the NDAI raster...')
+
+        # Load the raster layer
+        raster_layer = QgsRasterLayer(raster_path, 'NDAI Raster')
+        if not raster_layer.isValid():
+            raise QgsProcessingException(f'Failed to load raster layer: {raster_path}')
+
+        # Create a color ramp shader
+        shader = QgsRasterShader()
+        color_ramp = QgsColorRampShader()
+        color_ramp.setColorRampType(QgsColorRampShader.Interpolated)
+
+        # Define the color ramp (GnBu palette)
+        color_ramp.setColorRampItemList([
+            QgsColorRampShader.ColorRampItem(0, QColor(247, 252, 240), 'Low'),
+            QgsColorRampShader.ColorRampItem(0.25, QColor(204, 235, 197), 'Low-Mid'),
+            QgsColorRampShader.ColorRampItem(0.5, QColor(168, 221, 181), 'Mid'),
+            QgsColorRampShader.ColorRampItem(0.75, QColor(123, 204, 196), 'Mid-High'),
+            QgsColorRampShader.ColorRampItem(1, QColor(43, 140, 190), 'High')
+        ])
+        shader.setRasterShaderFunction(color_ramp)
+
+        # Apply the shader to the raster layer
+        renderer = QgsSingleBandPseudoColorRenderer(raster_layer.dataProvider(), 1, shader)
+        raster_layer.setRenderer(renderer)
+
+        # Refresh the layer to apply the symbology
+        raster_layer.triggerRepaint()
+
+        # Add the layer to the QGIS project
+        QgsProject.instance().addMapLayer(raster_layer)
+        feedback.pushInfo('Symbology applied successfully.')
 
     def name(self):
         """
