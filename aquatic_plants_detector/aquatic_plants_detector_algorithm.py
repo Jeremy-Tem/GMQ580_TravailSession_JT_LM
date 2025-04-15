@@ -138,7 +138,7 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         self.filter_ndai(temp_ndai_path, ndai_min, ndai_max, output_path, feedback)
 
         # Apply symbology to the output NDAI raster
-        self.apply_symbology(output_path, feedback)
+        self.apply_symbology(output_path, feedback, ndai_min, ndai_max)
 
         return {self.OUTPUT: output_path}
 
@@ -177,9 +177,10 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         ndai_ds = None
         out_ds = None
 
-    def apply_symbology(self, raster_path, feedback):
+    def apply_symbology(self, raster_path, feedback, ndai_min, ndai_max):
         """
-        Applies the Green-Blue (GnBu) color palette to the NDAI raster.
+        Applies a dynamic Green-Blue (GnBu) color palette to the NDAI raster
+        based on the user's predefined NDAI values.
         """
         feedback.pushInfo('Applying symbology to the NDAI raster...')
 
@@ -193,13 +194,13 @@ class AquaticPlantsDetectorAlgorithm(QgsProcessingAlgorithm):
         color_ramp = QgsColorRampShader()
         color_ramp.setColorRampType(QgsColorRampShader.Interpolated)
 
-        # Define the color ramp (GnBu palette)
+        # Define the color ramp dynamically based on ndai_min and ndai_max
         color_ramp.setColorRampItemList([
-            QgsColorRampShader.ColorRampItem(0, QColor(247, 252, 240), 'Low'),
-            QgsColorRampShader.ColorRampItem(0.25, QColor(204, 235, 197), 'Low-Mid'),
-            QgsColorRampShader.ColorRampItem(0.5, QColor(168, 221, 181), 'Mid'),
-            QgsColorRampShader.ColorRampItem(0.75, QColor(123, 204, 196), 'Mid-High'),
-            QgsColorRampShader.ColorRampItem(1, QColor(43, 140, 190), 'High')
+            QgsColorRampShader.ColorRampItem(ndai_min, QColor(247, 252, 240), 'Low'),
+            QgsColorRampShader.ColorRampItem(ndai_min + (ndai_max - ndai_min) * 0.25, QColor(204, 235, 197), 'Low-Mid'),
+            QgsColorRampShader.ColorRampItem(ndai_min + (ndai_max - ndai_min) * 0.5, QColor(168, 221, 181), 'Mid'),
+            QgsColorRampShader.ColorRampItem(ndai_min + (ndai_max - ndai_min) * 0.75, QColor(123, 204, 196), 'Mid-High'),
+            QgsColorRampShader.ColorRampItem(ndai_max, QColor(43, 140, 190), 'High')
         ])
         shader.setRasterShaderFunction(color_ramp)
 
